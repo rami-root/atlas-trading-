@@ -238,6 +238,80 @@ const ensureAdminAccount = async () => {
 
 ensureAdminAccount().catch(console.error);
 
+// Setup Admin Endpoint (for initial setup only)
+app.post('/api/setup-admin', async (req, res) => {
+  try {
+    const { secret } = req.body;
+    
+    // Simple security check
+    if (secret !== 'atlas-setup-2026') {
+      return res.status(403).json({ error: 'Invalid setup secret' });
+    }
+
+    // Check if admin already exists
+    const result = await db.execute(sql`
+      SELECT id FROM users WHERE role = 'admin' LIMIT 1
+    `);
+    
+    const existingAdmin = (result as unknown as { rows?: any[] }).rows?.[0];
+    if (existingAdmin) {
+      return res.json({ 
+        success: true, 
+        message: 'Admin account already exists',
+        email: 'admin@atlas.com'
+      });
+    }
+
+    // Create admin account
+    const adminEmail = 'admin@atlas.com';
+    const adminPassword = 'admin123';
+    const passwordHash = await bcrypt.hash(adminPassword, 10);
+    const id = nanoid();
+    const adminUsername = `admin_${adminEmail}`;
+    
+    // Generate unique referral code
+    let adminReferralCode = '';
+    let isUnique = false;
+    let attempts = 0;
+    
+    while (!isUnique && attempts < 10) {
+      adminReferralCode = `ATLAS${nanoid(6).toUpperCase()}`;
+      const existingCodeResult = await db.execute(sql`
+        SELECT id FROM users WHERE referral_code = ${adminReferralCode} LIMIT 1
+      `);
+      const existingCode = (Array.isArray(existingCodeResult) ? existingCodeResult : [])[0];
+      
+      if (!existingCode) {
+        isUnique = true;
+      } else {
+        attempts++;
+      }
+    }
+    
+    if (!isUnique) {
+      throw new Error('Failed to generate unique referral code');
+    }
+    
+    await db.execute(sql`
+      INSERT INTO users (id, username, email, password_hash, role, referral_code)
+      VALUES (${id}, ${adminUsername}, ${adminEmail}, ${passwordHash}, 'admin', ${adminReferralCode})
+    `);
+
+    console.log('✅ Admin account created via setup endpoint');
+    
+    res.json({ 
+      success: true, 
+      message: 'Admin account created successfully',
+      email: adminEmail,
+      password: adminPassword,
+      referralCode: adminReferralCode
+    });
+  } catch (error) {
+    console.error('Setup admin error:', error);
+    res.status(500).json({ error: 'Failed to create admin account' });
+  }
+});
+
 // TRPC Middleware
 app.use(
   '/api/trpc',
